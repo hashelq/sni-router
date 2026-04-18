@@ -1,0 +1,20 @@
+{
+  "_cli": "npx tsx src/cli.ts --config example-configurations/sni-router.json",
+  "proxy": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "mitm": {
+    "enabled": true,
+    "certDir": "./certs",
+    "caCertPath": "./ca-final.pem",
+    "caKeyPath": "./ca-key-only.pem",
+    "rules": {
+      "*.example.com": {
+        "type": "serve-static",
+        "value": "./example-configurations/html",
+        "fallback": "example.html"
+      }
+    }
+  }
+}
