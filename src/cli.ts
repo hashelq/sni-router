@@ -10,6 +10,13 @@
  * --config and --ts-config are mutually exclusive.
  */
 
+process.on("uncaughtException", (err) => {
+  console.error(`[FATAL] Uncaught exception: ${err.message}\n${err.stack}`);
+});
+process.on("unhandledRejection", (err) => {
+  console.error(`[FATAL] Unhandled rejection: ${err}`);
+});
+
 import { SniRouter } from "./index.js";
 import { loadJsonConfig, loadTsConfig } from "./config.js";
 

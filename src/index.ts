@@ -292,42 +292,51 @@ export class SniRouter {
   // ── MITM response ───────────────────────────────────────────────────
 
   private async serveMITMResponse(stream: tls.TLSSocket | DuplexStream, hostname: string, rule: Rule): Promise<void> {
-    const requestData = await this.collectUntil(stream, "\r\n\r\n", 16384);
-    if (!requestData) return;
+    try {
+      const requestData = await this.collectUntil(stream, "\r\n\r\n", 16384);
+      if (!requestData) return;
 
-    const headerText = requestData.toString("utf-8");
-    const parts = headerText.split("\r\n")[0].split(" ");
-    const headers = parseHeaders(headerText);
-    const method = parts.length >= 2 ? parts[0] : "GET";
-    const url = parts.length >= 2 ? parts[1] : "/";
+      const headerText = requestData.toString("utf-8");
+      const parts = headerText.split("\r\n")[0].split(" ");
+      const headers = parseHeaders(headerText);
+      const method = parts.length >= 2 ? parts[0] : "GET";
+      const url = parts.length >= 2 ? parts[1] : "/";
 
-    let body = Buffer.alloc(0);
-    const bodyStart = requestData.indexOf(Buffer.from("\r\n\r\n"));
-    if (bodyStart >= 0) body = Buffer.from(requestData.subarray(bodyStart + 4));
-    const contentLength = parseInt(headers["content-length"] || "0", 10);
-    if (contentLength > 0 && body.length < contentLength) {
-      body = Buffer.concat([body, await this.collectBytes(stream, contentLength - body.length)]);
-    }
-
-    if (rule.type === "handle") {
-      try {
-        let ended = false;
-        await rule.value(
-          { method, url, headers, body, hostname },
-          {
-            write: (d: string | Buffer) => stream.write(d),
-            end: () => { ended = true; },
-          },
-        );
-        if (ended) stream.end();
-      } catch (err) {
-        this._log("error", `Handle error for ${hostname}: ${(err as Error).message}`);
-        stream.write("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      let body = Buffer.alloc(0);
+      const bodyStart = requestData.indexOf(Buffer.from("\r\n\r\n"));
+      if (bodyStart >= 0) body = Buffer.from(requestData.subarray(bodyStart + 4));
+      const contentLength = parseInt(headers["content-length"] || "0", 10);
+      if (contentLength > 0 && body.length < contentLength) {
+        body = Buffer.concat([body, await this.collectBytes(stream, contentLength - body.length)]);
       }
-    } else if (method === "GET") {
-      await this.sendStaticResponse(stream, hostname, rule, url);
-    } else {
-      stream.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+
+      if (rule.type === "handle") {
+        try {
+          let ended = false;
+          await rule.value(
+            { method, url, headers, body, hostname },
+            {
+              write: (d: string | Buffer) => { if (!stream.destroyed) stream.write(d); },
+              end: () => { ended = true; },
+            },
+          );
+          if (ended) {
+            await new Promise<void>((resolve) => {
+              stream.on("finish", resolve);
+              stream.end();
+            });
+          }
+        } catch (err) {
+          this._log("error", `Handle error for ${hostname}: ${(err as Error).message}`);
+          if (!stream.destroyed) stream.write("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
+      } else if (method === "GET") {
+        await this.sendStaticResponse(stream, hostname, rule, url);
+      } else {
+        if (!stream.destroyed) stream.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      }
+    } catch (err) {
+      this._log("error", `MITM response error for ${hostname}: ${(err as Error).message}`);
     }
   }
 
@@ -411,12 +420,12 @@ export class SniRouter {
 
   private async collectBytes(s: tls.TLSSocket | DuplexStream, remaining: number): Promise<Buffer> {
     if (remaining <= 0) return Buffer.alloc(0);
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const chunks: Buffer[] = [];
       let collected = 0;
       const onData = (c: Buffer) => { chunks.push(c); collected += c.length; if (collected >= remaining) { s.removeListener("data", onData); resolve(Buffer.concat(chunks)); } };
       const onEnd = () => { s.removeListener("data", onData); resolve(Buffer.concat(chunks)); };
-      const onError = () => { s.removeListener("data", onData); reject(new Error("socket closed")); };
+      const onError = () => { s.removeListener("data", onData); resolve(Buffer.concat(chunks)); };
       s.on("data", onData); s.once("end", onEnd); s.once("error", onError);
     });
   }

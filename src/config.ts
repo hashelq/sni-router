@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const RuleSchema = z.discriminatedUnion("type", [
   z.object({
@@ -48,7 +49,7 @@ export function loadJsonConfig(configPath: string): ServerConfig {
 
 export async function loadTsConfig(configPath: string): Promise<ServerConfig> {
   const resolved = path.resolve(configPath);
-  const mod = await import(resolved);
+  const mod = await import(pathToFileURL(resolved).href);
   const raw = mod.default ?? mod;
   return ConfigSchema.parse(raw);
 }
